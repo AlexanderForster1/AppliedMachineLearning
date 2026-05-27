@@ -1,18 +1,26 @@
 from ultralytics import YOLO
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
+
 
 # 1. Load Dataset 
-dataset_path = "anti_spoofing_split_combined"
+DATASET_PATHS = [
+    SCRIPT_DIR / "anti_spoofing_split_combined",
+    PROJECT_ROOT / "anti_spoofing_split_combined",
+]
+dataset_path = next((path for path in DATASET_PATHS if path.exists()), None)
 
-if not Path(dataset_path).exists():
-    raise FileNotFoundError(f"Dataset folder not found: {dataset_path}")
+if dataset_path is None:
+    checked_paths = ", ".join(str(path) for path in DATASET_PATHS)
+    raise FileNotFoundError(f"Dataset folder not found. Checked: {checked_paths}")
 
 print("Dataset found:", dataset_path)
 
 
 # 2. Load YOLO classification model
-model = YOLO("yolo11n-cls.pt")
+model = YOLO(SCRIPT_DIR / "yolo11n-cls.pt")
 
 
 # 3. Train model
@@ -23,6 +31,7 @@ results = model.train(
     imgsz=224,
     batch=32,
     # device=0,
+    project=str(SCRIPT_DIR),
     name="anti_spoofing_yolo_with_aug_final01",
 
     

@@ -1,8 +1,20 @@
 import cv2
 from ultralytics import YOLO
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+MODEL_PATHS = [
+    SCRIPT_DIR / "weights" / "best.pt",
+    SCRIPT_DIR / "anti_spoofing_yolo_with_aug_final01" / "weights" / "best.pt",
+]
+
+model_path = next((path for path in MODEL_PATHS if path.exists()), None)
+if model_path is None:
+    checked_paths = ", ".join(str(path) for path in MODEL_PATHS)
+    raise FileNotFoundError(f"Anti-spoofing model not found. Checked: {checked_paths}")
 
 # Load trained anti-spoofing model
-model = YOLO(r"trained_model\anti_spoofing_yolo_with_aug_final01\weights\best.pt")
+model = YOLO(model_path)
 #"C:\Users\leona\runs\classify\anti_spoofing_yolo_light_aug\weights\best.pt" 1st best
 # C:\Users\leona\runs\classify\anti_spoofing_yolo_with_aug_final01\weights\best.pt 2nd best
 #"C:\Users\leona\runs\classify\anti_spoofing_yolo_light_aug_2\weights\best.pt" 3rd best
