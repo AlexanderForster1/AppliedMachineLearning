@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face Access</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #0f1115;
+      color: #f5f7fa;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0f1115;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      display: grid;
+      gap: 14px;
+    }
+
+    .camera {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      border: 1px solid #2a303b;
+      border-radius: 8px;
+      background: #050608;
+    }
+
+    .camera img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+
+    .emotion {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      min-width: 190px;
+      height: 82px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 8px;
+      background: rgba(12, 14, 18, 0.82);
+      backdrop-filter: blur(5px);
+    }
+
+    .emotion-icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #2f80ed;
+      color: #fff;
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .emotion-icon.happy {
+      background: #21a67a;
+    }
+
+    .emotion-icon.neutral {
+      background: #d6a51f;
+    }
+
+    .emotion-icon.angry {
+      background: #d84b4b;
+    }
+
+    .emotion-icon.sad {
+      background: #2f80ed;
+    }
+
+    .emotion-name {
+      font-size: 20px;
+      font-weight: 800;
+      text-transform: capitalize;
+    }
+
+    .emotion-confidence {
+      margin-top: 4px;
+      color: #b9c0cc;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    button {
+      height: 52px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 18px;
+      background: #2f80ed;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #252b36;
+      border: 1px solid #3b4250;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      background: #3b4250;
+      color: #9099a8;
+    }
+
+    .toast {
+      min-height: 22px;
+      color: #b9c0cc;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.62);
+    }
+
+    .modal.open {
+      display: grid;
+    }
+
+    .dialog {
+      width: min(420px, 100%);
+      border: 1px solid #303745;
+      border-radius: 8px;
+      background: #171a21;
+      padding: 18px;
+    }
+
+    .dialog h2 {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+
+    .dialog p {
+      margin: 0 0 14px;
+      color: #b9c0cc;
+      line-height: 1.4;
+    }
+
+    input {
+      width: 100%;
+      height: 44px;
+      margin-bottom: 12px;
+      border: 1px solid #363d4a;
+      border-radius: 8px;
+      padding: 0 12px;
+      background: #101319;
+      color: #f5f7fa;
+      font-size: 15px;
+    }
+
+    .dialog-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    @media (max-width: 640px) {
+      body {
+        place-items: start center;
+        padding-top: 12px;
+      }
+
+      main {
+        width: calc(100vw - 24px);
+      }
+
+      .actions,
+      .dialog-actions {
+        grid-template-columns: 1fr;
+      }
+
+      .emotion {
+        top: 10px;
+        right: 10px;
+        min-width: 150px;
+        height: 64px;
+        padding: 0 12px;
+      }
+
+      .emotion-icon {
+        width: 38px;
+        height: 38px;
+        font-size: 18px;
+      }
+
+      .emotion-name {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="camera">
+      <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
+      <div class="emotion" aria-live="polite">
+        <div id="emotionIcon" class="emotion-icon">?</div>
+        <div>
+          <div id="emotionName" class="emotion-name">Unknown</div>
+          <div id="emotionConfidence" class="emotion-confidence">0.00</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="addEmployeeButton" type="button" disabled>Add Employee</button>
+      <button id="loginButton" type="button" disabled>Login</button>
+    </div>
+    <div id="message" class="toast"></div>
+  </main>
+
+  <div id="addModal" class="modal" role="dialog" aria-modal="true">
+    <div class="dialog">
+      <h2>Add Employee</h2>
+      <p>Enter the employee name to save the current unknown face.</p>
+      <input id="employeeName" autocomplete="off" placeholder="Employee name">
+      <div class="dialog-actions">
+        <button id="saveEmployeeButton" type="button">Save</button>
+        <button id="cancelAddButton" class="secondary" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loginModal" class="modal" role="dialog" aria-modal="true">
+    <div class="dialog">
+      <h2>Confirm Login</h2>
+      <p id="loginQuestion">Are you the detected employee?</p>
+      <input id="correctName" autocomplete="off" placeholder="Correct employee name">
+      <div class="dialog-actions">
+        <button id="confirmLoginButton" type="button">Login</button>
+        <button id="correctLoginButton" class="secondary" type="button">Correct</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const addEmployeeButton = document.getElementById("addEmployeeButton");
+    const loginButton = document.getElementById("loginButton");
+    const messageEl = document.getElementById("message");
+    const emotionIconEl = document.getElementById("emotionIcon");
+    const emotionNameEl = document.getElementById("emotionName");
+    const emotionConfidenceEl = document.getElementById("emotionConfidence");
+    const addModal = document.getElementById("addModal");
+    const loginModal = document.getElementById("loginModal");
+    const employeeNameInput = document.getElementById("employeeName");
+    const correctNameInput = document.getElementById("correctName");
+    const saveEmployeeButton = document.getElementById("saveEmployeeButton");
+    const cancelAddButton = document.getElementById("cancelAddButton");
+    const confirmLoginButton = document.getElementById("confirmLoginButton");
+    const correctLoginButton = document.getElementById("correctLoginButton");
+    const loginQuestion = document.getElementById("loginQuestion");
+
+    let latestStatus = {};
+
+    const emotionIcons = {
+      angry: "!",
+      happy: ":)",
+      neutral: ":|",
+      sad: ":(",
+    };
+
+    function formatConfidence(value) {
+      return Number(value || 0).toFixed(2);
+    }
+
+    function openModal(modal, input) {
+      modal.classList.add("open");
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+    }
+
+    function closeModal(modal) {
+      modal.classList.remove("open");
+    }
+
+    async function postJson(url, payload = {}) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      messageEl.textContent = data.message || "";
+      return data;
+    }
+
+    async function refreshStatus() {
+      try {
+        const response = await fetch("/api/status");
+        const data = await response.json();
+        latestStatus = data;
+
+        const emotion = data.emotion || {emotion: "?", confidence: 0};
+        const emotionName = emotion.emotion || "?";
+        emotionIconEl.textContent = emotionIcons[emotion.emotion] || "?";
+        emotionIconEl.className = `emotion-icon ${emotionIcons[emotionName] ? emotionName : ""}`;
+        emotionNameEl.textContent = emotionName === "?" ? "Unknown" : emotionName;
+        emotionConfidenceEl.textContent = formatConfidence(emotion.confidence);
+
+        addEmployeeButton.disabled = !data.can_add_face;
+        loginButton.disabled = !data.can_login;
+
+        if (data.message) {
+          messageEl.textContent = data.message;
+        }
+      } catch (error) {
+        messageEl.textContent = "Disconnected from server.";
+      }
+    }
+
+    addEmployeeButton.addEventListener("click", () => {
+      if (!latestStatus.can_add_face) return;
+      openModal(addModal, employeeNameInput);
+    });
+
+    cancelAddButton.addEventListener("click", () => {
+      closeModal(addModal);
+    });
+
+    saveEmployeeButton.addEventListener("click", async () => {
+      const name = employeeNameInput.value.trim();
+      if (!name) return;
+      const data = await postJson("/api/add-face", {name});
+      if (data.ok) {
+        closeModal(addModal);
+      }
+      refreshStatus();
+    });
+
+    loginButton.addEventListener("click", () => {
+      if (!latestStatus.can_login) return;
+      const person = latestStatus.detected_person || "the detected employee";
+      loginQuestion.textContent = `Are you ${person}?`;
+      openModal(loginModal, correctNameInput);
+    });
+
+    confirmLoginButton.addEventListener("click", async () => {
+      const data = await postJson("/api/login");
+      if (data.ok) {
+        closeModal(loginModal);
+      }
+      refreshStatus();
+    });
+
+    correctLoginButton.addEventListener("click", async () => {
+      const name = correctNameInput.value.trim();
+      if (!name) return;
+      const data = await postJson("/api/correct-login", {name});
+      if (data.ok) {
+        closeModal(loginModal);
+      }
+      refreshStatus();
+    });
+
+    [addModal, loginModal].forEach((modal) => {
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closeModal(modal);
+        }
+      });
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 1000);
+  </script>
+</body>
+</html>
