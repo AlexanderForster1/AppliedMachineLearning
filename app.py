@@ -12,23 +12,23 @@ import GUI
 
 app = Flask(__name__)
 
-
+# Helper functions to convert values to JSON-serializable formats for the API responses.
 def json_float(value):
     if value is None:
         return None
     return float(value)
 
-
+# Convert a value to a boolean for JSON serialization.
 def json_bool(value):
     return bool(value)
 
-
+# Convert a value to a string for JSON serialization, handling None as null.
 def json_text(value):
     if value is None:
         return None
     return str(value)
 
-
+# The main class that handles camera capture, face recognition, emotion detection, and API interactions.
 class CameraProcessor:
     def __init__(self):
         self.lock = Lock()
@@ -61,6 +61,8 @@ class CameraProcessor:
         self.emotion_face_cascade = None
         self.faces = []
 
+    # Load the face embedding model, emotion detection model, anti-spoofing model, and Haar cascades for face detection. 
+    # Also load known faces from the database.
     def load(self):
         if self.face_model is not None:
             return
@@ -89,6 +91,7 @@ class CameraProcessor:
         self.faces = GUI.load_faces(GUI.DB_PATH, self.face_model)
         print(f"Loaded {len(self.faces)} faces from database.")
 
+    # Start the camera capture and processing threads if they are not already running.
     def start(self):
         self.load()
 
@@ -113,6 +116,8 @@ class CameraProcessor:
             self.emotion_thread = Thread(target=self.emotion_loop, daemon=True)
             self.emotion_thread.start()
 
+    # The main loop for capturing frames from the camera. 
+    # It continuously reads frames and updates the latest frame and status.
     def capture_loop(self):
         while not self.stop_event.is_set():
             ok, frame = self.cap.read()
@@ -124,6 +129,8 @@ class CameraProcessor:
                 self.latest_frame = frame
                 self.latest_status["running"] = True
 
+    # The main loop for running face recognition and anti-spoofing inference on the latest captured frame. 
+    # It updates the latest results and status based on the inference.
     def inference_loop(self):
         while not self.stop_event.is_set():
             with self.lock:
@@ -152,6 +159,8 @@ class CameraProcessor:
 
             time.sleep(0.02)
 
+    # The main loop for running emotion detection on the latest captured frame. 
+    # It updates the latest emotion and status based on the inference.
     def emotion_loop(self):
         while not self.stop_event.is_set():
             with self.lock:
@@ -169,6 +178,8 @@ class CameraProcessor:
 
             time.sleep(0.05)
 
+    # Run face detection, recognition, and anti-spoofing inference on the given frame. 
+    # It returns the results and any detected unknown or recognized faces.
     def run_inference(self, frame):
         results = []
         unknown_face = None
@@ -226,6 +237,8 @@ class CameraProcessor:
 
         return results, unknown_face, detected_face, detected_name, message
 
+    # Run emotion detection on the given frame. 
+    # It detects faces in the frame and predicts the emotion for the largest detected face, returning the emotion and confidence.
     def run_emotion_detection(self, frame):
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         detected_faces = self.emotion_face_cascade.detectMultiScale(
@@ -246,6 +259,8 @@ class CameraProcessor:
         emotion, confidence = GUI.predict_emotion(face_img, self.emotion_model)
         return {"emotion": json_text(emotion), "confidence": json_float(confidence)}
 
+    # Convert the raw inference results into a format suitable for the API response, 
+    # extracting relevant fields and converting them to JSON-serializable types.
     def status_faces(self, results):
         return [{
             "name": json_text(result["name"]),
@@ -255,6 +270,8 @@ class CameraProcessor:
             "is_spoof": json_bool(result["is_spoof"]),
         } for result in results]
 
+    # Draw rectangles and labels on the given frame based on the latest inference results, 
+    # indicating detected faces, their recognized names, distances, and spoofing status.
     def draw_overlay(self, frame):
         with self.lock:
             results = list(self.latest_results)
@@ -281,6 +298,8 @@ class CameraProcessor:
 
         return output
 
+    # A generator function that yields JPEG-encoded frames with overlay for streaming to the web interface. 
+    # It continuously captures frames, runs inference, and encodes the output for display.
     def frames(self):
         self.start()
 
@@ -304,6 +323,8 @@ class CameraProcessor:
 
             time.sleep(0.01)
 
+    # Add a new face to the database with the given name, using the latest detected unknown face. 
+    # It saves the face image, creates an embedding, and updates the known faces list and status.
     def add_face(self, person_name):
         person_name = person_name.strip()
         if not person_name:
@@ -325,6 +346,8 @@ class CameraProcessor:
 
         return True, f"Added {person_name}."
 
+    # Save the given face image for the specified person name in the database directory. 
+    # It creates an embedding for the face and updates the known faces list.
     def save_face_for_person(self, person_name, face_img):
         person_dir = Path(GUI.DB_PATH) / person_name
         person_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +367,8 @@ class CameraProcessor:
 
         return True, f"Saved face for {person_name}."
 
+    # Attempt to log in using the latest detected face. 
+    # It checks if a recognized employee is available and returns the appropriate message.
     def login(self):
         with self.lock:
             detected_name = self.latest_detected_name
@@ -354,6 +379,8 @@ class CameraProcessor:
 
         return True, f"Logged in as {detected_name}."
 
+    # Correct the login by saving the latest detected face under the provided person name. 
+    # This allows users to correct misrecognized faces by adding them to the database with the correct name.
     def correct_login(self, person_name):
         person_name = person_name.strip()
         if not person_name:
@@ -370,6 +397,8 @@ class CameraProcessor:
                 self.latest_status["message"] = f"Saved correction for {person_name}."
         return ok, message
 
+    # Get the current status of the system, 
+    # including whether it's running, detected faces, emotion, and other relevant information for the API response.
     def status(self):
         with self.lock:
             return {
@@ -389,12 +418,12 @@ class CameraProcessor:
 
 processor = CameraProcessor()
 
-
+# Flask route for the main page, rendering the index.html template.
 @app.route("/")
 def index():
     return render_template("index.html")
 
-
+# Flask route for the video feed, streaming the processed frames with overlay to the web interface.
 @app.route("/video_feed")
 def video_feed():
     return Response(
@@ -402,25 +431,29 @@ def video_feed():
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
-
+# Flask route for the API endpoint to get the current status of the system, 
+# returning JSON data with detected faces, emotion, and other relevant information.
 @app.route("/api/status")
 def status():
     return jsonify(processor.status())
 
-
+# Flask route for the API endpoint to add a new face to the database. 
+# It accepts a POST request with the person's name and uses the latest detected unknown face to create a new entry in the database.
 @app.route("/api/add-face", methods=["POST"])
 def add_face():
     data = request.get_json(silent=True) or {}
     ok, message = processor.add_face(data.get("name", ""))
     return jsonify({"ok": ok, "message": message}), 200 if ok else 400
 
-
+# Flask route for the API endpoint to log in using the latest detected face. 
+# It checks if a recognized employee is available and returns the appropriate message.
 @app.route("/api/login", methods=["POST"])
 def login():
     ok, message = processor.login()
     return jsonify({"ok": ok, "message": message}), 200 if ok else 400
 
-
+# Flask route for the API endpoint to correct a login by saving the latest detected face under the provided person name. 
+# This allows users to correct misrecognized faces by adding them to the database with the correct name.
 @app.route("/api/correct-login", methods=["POST"])
 def correct_login():
     data = request.get_json(silent=True) or {}
