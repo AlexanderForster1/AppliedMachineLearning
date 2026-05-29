@@ -9,7 +9,10 @@ from flask import Flask, Response, jsonify, render_template, request
 from tensorflow import keras
 
 import GUI
+import sys
 
+sys.path.insert(0, str(Path(__file__).parent / "feature" / "emotion-detection"))
+from emotion_logger import EmotionLogger
 
 app = Flask(__name__)
 
@@ -105,6 +108,10 @@ class CameraProcessor:
         print("Loading faces from database...")
         self.faces = GUI.load_faces(GUI.DB_PATH, self.face_model)
         print(f"Loaded {len(self.faces)} faces from database.")
+
+        log_dir = Path(__file__).parent / "feature" / "emotion-detection" / "log"
+        self.emotion_logger = EmotionLogger(self.emotion_model, log_dir)
+        print(f"Emotion logger initialised, writing to {log_dir}")
 
     def parse_camera_source(self, source):
         if isinstance(source, int):
@@ -342,14 +349,19 @@ class CameraProcessor:
         )
 
         if len(detected_faces) == 0:
+            self.emotion_logger.observe(frame, None, None, "?", 0.0)
             return {"emotion": "?", "confidence": 0.0}
 
         x, y, w, h = max(detected_faces, key=lambda face: face[2] * face[3])
         face_img = frame[y:y+h, x:x+w]
         if face_img.size == 0:
+            self.emotion_logger.observe(frame, None, None, "?", 0.0)
             return {"emotion": "?", "confidence": 0.0}
 
+        preprocessed = GUI.preprocess_emotion_face(face_img)
         emotion, confidence = GUI.predict_emotion(face_img, self.emotion_model)
+        self.emotion_logger.observe(frame, (x, y, w, h), preprocessed,
+                                 emotion, confidence)
         return {"emotion": json_text(emotion), "confidence": json_float(confidence)}
 
     # Convert the raw inference results into a format suitable for the API response, 

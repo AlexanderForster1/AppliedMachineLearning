@@ -5,3 +5,4 @@ train_filtered/
 test_filtered/
 __pycache__/
 .ipynb_checkpoints/
+log/
