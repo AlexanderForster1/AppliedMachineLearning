@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock, Thread
+import os
 import time
 
 import cv2 as cv
@@ -28,12 +29,24 @@ def json_text(value):
         return None
     return str(value)
 
+
+def video_capture(source):
+    if os.name == "nt" and isinstance(source, int):
+        return cv.VideoCapture(source, cv.CAP_DSHOW)
+    return cv.VideoCapture(source)
+
 # The main class that handles camera capture, face recognition, emotion detection, and API interactions.
 class CameraProcessor:
     def __init__(self):
         self.lock = Lock()
+        self.capture_lock = Lock()
         self.stop_event = Event()
         self.cap = None
+        self.camera_source = 0
+        self.max_camera_index = 5
+        self.camera_sources_cache = None
+        self.camera_sources_checked_at = 0
+        self.camera_sources_ttl = 30
         self.capture_thread = None
         self.inference_thread = None
         self.emotion_thread = None
@@ -51,6 +64,8 @@ class CameraProcessor:
             "can_add_face": False,
             "can_login": False,
             "detected_person": None,
+            "camera_source": self.camera_source,
+            "camera_sources": [],
             "message": "Camera not started",
         }
 
@@ -91,18 +106,91 @@ class CameraProcessor:
         self.faces = GUI.load_faces(GUI.DB_PATH, self.face_model)
         print(f"Loaded {len(self.faces)} faces from database.")
 
+    def parse_camera_source(self, source):
+        if isinstance(source, int):
+            return source
+        source = str(source).strip()
+        if source.isdigit():
+            return int(source)
+        return 0
+
+    def discover_camera_sources(self, force=False):
+        now = time.time()
+        if (
+            not force
+            and self.camera_sources_cache is not None
+            and now - self.camera_sources_checked_at < self.camera_sources_ttl
+        ):
+            return list(self.camera_sources_cache)
+
+        sources = []
+
+        with self.capture_lock:
+            current_source = self.camera_source
+            current_cap = self.cap
+
+        for index in range(self.max_camera_index + 1):
+            if index == current_source and current_cap is not None and current_cap.isOpened():
+                sources.append({"id": index, "label": f"Camera {index}"})
+                continue
+
+            cap = video_capture(index)
+            if cap.isOpened():
+                sources.append({"id": index, "label": f"Camera {index}"})
+            cap.release()
+
+        if not sources:
+            sources.append({"id": current_source, "label": f"Camera {current_source}"})
+
+        self.camera_sources_cache = list(sources)
+        self.camera_sources_checked_at = now
+        return sources
+
+    def open_camera(self, source):
+        parsed_source = self.parse_camera_source(source)
+        cap = video_capture(parsed_source)
+        if not cap.isOpened():
+            cap.release()
+            raise RuntimeError(f"Cannot open camera source: {parsed_source}")
+
+        # Keep the camera buffer tiny so the UI shows recent frames, not stale frames.
+        cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
+
+        with self.capture_lock:
+            old_cap = self.cap
+            self.cap = cap
+            self.camera_source = parsed_source
+
+        if old_cap is not None:
+            old_cap.release()
+
+        with self.lock:
+            self.latest_frame = None
+            self.latest_unknown_face = None
+            self.latest_detected_face = None
+            self.latest_detected_name = None
+            self.latest_results = []
+            self.latest_emotion = {"emotion": "?", "confidence": 0.0}
+            self.latest_status = {
+                "running": True,
+                "faces": [],
+                "emotion": self.latest_emotion,
+                "can_add_face": False,
+                "can_login": False,
+                "detected_person": None,
+                "camera_source": self.camera_source,
+                "message": f"Camera source changed to {self.camera_source}",
+            }
+
     # Start the camera capture and processing threads if they are not already running.
     def start(self):
         self.load()
 
-        if self.cap is None:
-            self.cap = cv.VideoCapture(0)
-            if not self.cap.isOpened():
-                self.cap = None
-                raise RuntimeError("Cannot open camera")
+        with self.capture_lock:
+            needs_camera = self.cap is None
 
-            # Keep the camera buffer tiny so the UI shows recent frames, not stale frames.
-            self.cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
+        if needs_camera:
+            self.open_camera(self.camera_source)
 
         if self.capture_thread is None or not self.capture_thread.is_alive():
             self.capture_thread = Thread(target=self.capture_loop, daemon=True)
@@ -120,7 +208,10 @@ class CameraProcessor:
     # It continuously reads frames and updates the latest frame and status.
     def capture_loop(self):
         while not self.stop_event.is_set():
-            ok, frame = self.cap.read()
+            with self.capture_lock:
+                cap = self.cap
+                ok, frame = (False, None) if cap is None else cap.read()
+
             if not ok:
                 time.sleep(0.03)
                 continue
@@ -128,6 +219,7 @@ class CameraProcessor:
             with self.lock:
                 self.latest_frame = frame
                 self.latest_status["running"] = True
+                self.latest_status["camera_source"] = self.camera_source
 
     # The main loop for running face recognition and anti-spoofing inference on the latest captured frame. 
     # It updates the latest results and status based on the inference.
@@ -154,6 +246,7 @@ class CameraProcessor:
                     "can_add_face": unknown_face is not None,
                     "can_login": detected_face is not None and detected_name not in (None, "Unknown", "Spoof"),
                     "detected_person": detected_name,
+                    "camera_source": self.camera_source,
                     "message": message,
                 }
 
@@ -397,6 +490,24 @@ class CameraProcessor:
                 self.latest_status["message"] = f"Saved correction for {person_name}."
         return ok, message
 
+    def set_camera_source(self, source):
+        parsed_source = self.parse_camera_source(source)
+        available_ids = {item["id"] for item in self.discover_camera_sources()}
+        if parsed_source not in available_ids:
+            message = f"Camera {parsed_source} is not available."
+            with self.lock:
+                self.latest_status["message"] = message
+            return False, message
+
+        try:
+            self.open_camera(parsed_source)
+        except RuntimeError as e:
+            with self.lock:
+                self.latest_status["message"] = str(e)
+            return False, str(e)
+
+        return True, f"Camera source changed to {self.camera_source}."
+
     # Get the current status of the system, 
     # including whether it's running, detected faces, emotion, and other relevant information for the API response.
     def status(self):
@@ -411,6 +522,8 @@ class CameraProcessor:
                 "can_add_face": json_bool(self.latest_status.get("can_add_face", False)),
                 "can_login": json_bool(self.latest_status.get("can_login", False)),
                 "detected_person": json_text(self.latest_status.get("detected_person")),
+                "camera_source": json_text(self.latest_status.get("camera_source", self.camera_source)),
+                "camera_sources": list(self.camera_sources_cache or []),
                 "message": json_text(self.latest_status.get("message", "")) or "",
                 "known_people": sorted({face["name"] for face in self.faces}),
             }
@@ -459,6 +572,19 @@ def correct_login():
     data = request.get_json(silent=True) or {}
     ok, message = processor.correct_login(data.get("name", ""))
     return jsonify({"ok": ok, "message": message}), 200 if ok else 400
+
+
+@app.route("/api/camera-source", methods=["POST"])
+def camera_source():
+    data = request.get_json(silent=True) or {}
+    ok, message = processor.set_camera_source(data.get("source", 0))
+    return jsonify({"ok": ok, "message": message}), 200 if ok else 400
+
+
+@app.route("/api/camera-sources")
+def camera_sources():
+    force = request.args.get("refresh") == "1"
+    return jsonify({"sources": processor.discover_camera_sources(force=force)})
 
 
 if __name__ == "__main__":
