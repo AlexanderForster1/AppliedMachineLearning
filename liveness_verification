@@ -1,0 +1,337 @@
+import cv2
+import mediapipe as mp
+import math
+import random
+import time
+from ultralytics import YOLO
+
+# ----- YOLO Model ----
+model = YOLO(r"C:\Users\leona\runs\classify\anti_spoofing_yolo_with_aug_final01\weights\best.pt")
+
+# ---- Face Mesh Model ----
+# ref: https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/face_mesh.md
+# accessing mediapipe's face mesh module
+mp_face_mesh = mp.solutions.face_mesh
+
+# creates the Face Mesh detector and detect only 1 face
+face_mesh = mp_face_mesh.FaceMesh(
+    max_num_faces=1
+)
+# -------------------------
+
+# FACE PART COORDINATES
+# ref: https://www.sanderdesnaijer.com/blog/mediapipe-face-mesh-landmarks?utm_source
+LEFT_EYE = [33, 159, 145, 133] #33 left outer corner, 159 top eyelid, 145 bottom eyelid, 133 right inner corner
+RIGHT_EYE = [362, 386, 374, 263]
+NOSE = 4
+LEFT_FACE = 234
+RIGHT_FACE = 454
+
+
+# DISTANCE FUNCTION BETWEEN UPPER EYE LID AND LOWER EYE LID
+def distance(point1, point2):
+    return math.sqrt(
+        (point1.x - point2.x) ** 2 +
+        (point1.y - point2.y) ** 2
+    )
+
+# PUT TEXT ON CAM FUCNTION
+def text_on_cam(text, next):
+    output = cv2.putText(
+                frame,
+                text,
+                (30, 50 + next),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2
+            )
+    return output
+
+
+# Defining Challenge
+challenges = ["Blink Twice", "Turn head left", "Turn head right"]
+ran_challenge = random.choice(challenges)
+
+# ---- Temporary storage ----
+eye_was_closed = False
+text_count = 0
+# text_blink = "Please Blink"
+# text_turn_right = "Please turn head right"
+# text_turn_left = "Please turn head left"
+if ran_challenge == "Blink Twice":
+    text1 = "Please Blink Twice"
+elif ran_challenge == "Turn head right":
+    text1 = "Please turn head right"
+elif ran_challenge == "Turn head left":
+    text1 = "Please turn head left"
+
+beginning_text = ""
+challenge_passed = False
+challenge_failed = False
+status = "Waiting.."
+text2 = "Status: " + status
+# head_turned_right = False
+# head_turned_left = False
+
+challenge_start_time = None
+verification_start_time = time.time()
+real_count = 0
+spoof_count = 0
+verification_done = False
+verification_result = ""
+
+# --------------------------
+
+# Initialize webcam
+webcam = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = webcam.read() # Takes one image from the camera, "ret" means sucess or fail, "frame" means the actual camera image.
+
+    frame = cv2.flip(frame, 1) # (1) flip the frame horizontally (mirror like), (0) flip the frame vertically
+
+    # ---------------- YOLO 3-second verification ----------------
+
+    if not verification_done:
+        yolo_result = model(frame, verbose=False)[0]
+
+        predicted_id = yolo_result.probs.top1
+        predicted_label = model.names[predicted_id]
+
+        if predicted_label == "real":
+            real_count += 1
+        else:
+            spoof_count += 1
+
+        elapsed_time = time.time() - verification_start_time
+
+        cv2.putText(frame, f"Verifying... {elapsed_time:.1f}s", (30, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+        cv2.putText(frame, f"Real: {real_count} | Spoof: {spoof_count}", (30, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+        if elapsed_time >= 5:
+            verification_done = True
+
+            if real_count > spoof_count:
+                verification_result = "REAL"
+                challenge_start_time = time.time()
+            else:
+                verification_result = "REJECTED"
+    
+    # ---------------- If rejected ----------------
+    elif verification_result == "REJECTED":
+        cv2.putText(frame, "Rejected - Please try again", (30, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+    # ---------------- If real, start challenge ----------------
+    elif verification_result == "REAL":
+        challenge_elapsed = time.time() - challenge_start_time
+        time_left = max(0, 10 - int(challenge_elapsed))
+
+        if challenge_elapsed >= 10 and not challenge_passed:
+            challenge_failed = True
+            status = "Failed"
+
+        if not challenge_failed and not challenge_passed:
+
+            # ---- Face Mesh starts ----
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # OpenCV uses BGR colour order, but MediaPipe expects RGB, so we convert it.
+            results = face_mesh.process(rgb_frame) # Sends the camera image to MediaPipe so it can find face landmarks.
+
+            # # Test to see if face mesh detect a face (it did)
+            # if results.multi_face_landmarks:
+            #     print("Face detected")
+            # else:
+            #     print("No face detected")
+
+            if results.multi_face_landmarks: # if there is a face detected:
+                landmarks = results.multi_face_landmarks[0].landmark # get the first detected face, .landmarks gets all the face points
+                # print(landmarks[1]) # gets landmarks point number 1, which is around the nose tip area (after running, it will show coordinate value of that area)
+
+                # ----- EYE RATIO -----
+                # LEFT EYE RATIO
+                LE_outer_corner = landmarks[33]
+                LE_top = landmarks[159]
+                LE_bottom = landmarks[145]
+                LE_inner_corner = landmarks[133]
+
+                LE_vertical_distance = distance(LE_top, LE_bottom)
+                LE_horizontal_distance = distance(LE_outer_corner, LE_inner_corner)
+                LE_eye_ratio = LE_vertical_distance / LE_horizontal_distance # face size changes when you move closer/farther from the camera. Dividing by the eye width makes the value more stable.
+                # print("LE ratio:", LE_eye_ratio)
+
+                # RIGHT EYE RATIO
+                RE_outer_corner = landmarks[263]
+                RE_top = landmarks[386]
+                RE_bottom = landmarks[374]
+                RE_inner_corner = landmarks[362]
+                
+
+                RE_vertical_distance = distance(RE_top, RE_bottom)
+                RE_horizontal_distance = distance(RE_outer_corner, RE_inner_corner)
+                RE_eye_ratio = RE_vertical_distance / RE_horizontal_distance # face size changes when you move closer/farther from the camera. Dividing by the eye width makes the value more stable.
+                # print("RE ratio:", RE_eye_ratio)
+
+                # AVERAGE EYE Ratio
+                average_eye_ratio = (LE_eye_ratio + RE_eye_ratio) / 2
+                # print("Avg ratio:", average_eye_ratio)
+
+                # print("Vertical:", vertical_distance)
+                # print("Horizontal:", horizontal_distance)
+                # print("Eye ratio:", average_eye_ratio) # teh smaller the eye ratio, the more closed the eye is. #this is used to determine the threshold
+                if ran_challenge == "Blink Twice":
+                    beginning_text = "Challenge: Blink Twice"
+
+                    if average_eye_ratio < 0.25:
+                        eye_was_closed = True
+                        # text = "Eye closed"
+                        
+                    elif eye_was_closed == True and average_eye_ratio > 0.25:
+                        text_count += 1
+                        eye_was_closed = False
+
+                        if text_count >= 2:
+                            text1 = "Blink Detected"
+                            challenge_passed = True
+                            status = "Passed"
+                        text2 = "Status: " + status
+
+                # -------------------
+
+                # ---- HEAD DIRECTION ----
+                nose = landmarks[NOSE]
+                left_face = landmarks[LEFT_FACE]
+                right_face = landmarks[RIGHT_FACE]
+
+                left_distance = distance(nose, left_face)
+                right_distance = distance(nose, right_face)
+
+                direction_ratio = left_distance / right_distance
+
+                # print("Left distance:", left_distance)
+                # print("Right distance:", right_distance)
+                # print("Direction ratio:", direction_ratio)
+                if ran_challenge == "Turn head right":
+                    beginning_text = "Challenge: Turn head right"
+
+                    if direction_ratio > 5:
+                        # head_turned_right = True
+                        challenge_passed = True
+                        text1 = "Head turned right detected"
+                        status = "Passed"
+                        text2 = "Status: " + status
+                    
+                
+                if ran_challenge == "Turn head left":
+                    beginning_text = "Challenge: Turn head left"
+
+                    if direction_ratio < 0.2:
+                        # head_turned_left = True
+                        challenge_passed = True
+                        text1 = "Head turned left detected"
+                        status = "Passed"
+                        text2 = "Status: " + status
+
+            # ---- Show eye points on cam ----
+
+            # height, width, _ = frame.shape
+
+            # for point in LEFT_EYE:
+            #     eye_point = landmarks[point]
+
+            #     x = int(eye_point.x * width) # calculate into pixel for cv2 (coordinates ratio x pixel width)
+            #     y = int(eye_point.y * height)
+
+            #     cv2.circle(frame, (x, y), 4, (0, 255, 0), -1) # green dots on eye
+            
+            # for point1 in RIGHT_EYE:
+            #     eye_point1 = landmarks[point1]
+
+            #     x1 = int(eye_point1.x * width) # calculate into pixel for cv2 (coordinates ratio x pixel width)
+            #     y1 = int(eye_point1.y * height)
+
+            #     cv2.circle(frame, (x1, y1), 4, (0, 255, 0), -1) # green dots on eye
+
+            # # ---- NOSE POINT ----
+            # nose_point = landmarks[NOSE]
+            # x2 = int(nose_point.x * width) # calculate into pixel for cv2 (coordinates ratio x pixel width)
+            # y2 = int(nose_point.y * height)
+
+            # cv2.circle(frame, (x2, y2), 4, (0, 255, 0), -1) # green dot on nose
+
+            # # ---- FACE POINTS ----
+            # left_face_point = landmarks[LEFT_FACE]
+            # x3 = int(left_face_point.x * width) # calculate into pixel for cv2 (coordinates ratio x pixel width)
+            # y3 = int(left_face_point.y * height)
+            # cv2.circle(frame, (x3, y3), 4, (0, 255, 0), -1) # green dot on left face
+
+            # right_face_point = landmarks[RIGHT_FACE]
+            # x4 = int(right_face_point.x * width) # calculate into pixel for cv2
+            # y4 = int(right_face_point.y * height)
+            # cv2.circle(frame, (x4, y4), 4, (0, 255, 0), -1) # green dot on right face
+
+        # ---------------------
+
+        # ---- TEXT ON CAM ----
+        text_on_cam(f"Challenge: {ran_challenge}", 0)
+        text_on_cam(text1, 40)
+        text_on_cam(f"Status: {status}", 80)
+        text_on_cam(f"Time Left: {time_left}s", 120)
+        
+        if challenge_passed:
+            cv2.putText(frame, "Attendance Marked", (30, 220),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+
+        elif challenge_failed:
+            cv2.putText(frame, "Challenge Failed", (30, 220),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+            
+        # ---------------------
+
+
+    cv2.imshow("Liveness Detection", frame) # show image in a window
+
+    # Quit or restart
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord("r"):
+        ran_challenge = random.choice(challenges)
+
+        eye_was_closed = False
+        text_count = 0
+        # text_blink = "Please Blink"
+        # text_turn_right = "Please turn head right"
+        # text_turn_left = "Please turn head left"
+        if ran_challenge == "Blink Twice":
+            text1 = "Please Blink Twice"
+        elif ran_challenge == "Turn head right":
+            text1 = "Please turn head right"
+        elif ran_challenge == "Turn head left":
+            text1 = "Please turn head left"
+
+        beginning_text = ""
+        challenge_passed = False
+        challenge_failed = False
+        status = "Waiting.."
+        text2 = "Status: " + status
+        # head_turned_right = False
+        # head_turned_left = False
+
+        verification_start_time = time.time()
+        real_count = 0
+        spoof_count = 0
+        verification_done = False
+        verification_result = ""
+        challenge_start_time = None
+
+    elif key == ord("q"):
+        break
+
+webcam.release() # closes the webcam properly
+cv2.destroyAllWindows() # closes the camera window
+
+
+
